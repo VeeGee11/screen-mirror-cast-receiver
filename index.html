@@ -9,16 +9,25 @@
       padding: 0;
       width: 100%;
       height: 100%;
-      background: black;
+      background: #000;
+      overflow: hidden;
     }
-    cast-media-player {
+    /* Full-screen video fed by MediaSource. object-fit:contain preserves the
+       source aspect ratio (the sender also letterboxes into a fixed frame, so
+       both portrait and landscape look correct). */
+    #video {
+      position: fixed;
+      top: 0; left: 0;
       width: 100%;
       height: 100%;
+      object-fit: contain;
+      background: #000;
+      z-index: 1;
     }
   </style>
 </head>
 <body>
-  <cast-media-player></cast-media-player>
+  <video id="video" autoplay muted playsinline></video>
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
   <script src="receiver.js"></script>
 </body>
