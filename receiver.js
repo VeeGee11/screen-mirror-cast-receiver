@@ -101,15 +101,16 @@ connect();
 setInterval(function () {
   if (sourceBuffer && !sourceBuffer.updating && sourceBuffer.buffered.length) {
     const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-    if (end - video.currentTime > 2.5) {
-      // Drifted behind — jump forward to ~0.8s behind live.
-      video.currentTime = end - 0.8;
+    if (end - video.currentTime > 1.4) {
+      // Drifted behind — jump forward to ~0.4s behind live. Fragments arrive
+      // continuously, so a small cushion stays stable while keeping latency low.
+      video.currentTime = end - 0.4;
     }
     trimBuffer(false);
   }
   if (video.paused && video.readyState >= 2) {
     video.play().catch(function () {});
   }
-}, 1000);
+}, 500);
 
 log('Started, connecting to', WS_URL);
