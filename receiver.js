@@ -34,8 +34,11 @@ function setupMediaSource(codecString) {
     log('codec NOT supported:', type);
     return;
   }
+  // Tear down any previous session so a new start rebuilds cleanly.
+  teardownPlayback();
   mediaSource = new MediaSource();
   video.src = URL.createObjectURL(mediaSource);
+  video.style.visibility = 'visible';
   mediaSource.addEventListener('sourceopen', function () {
     sourceBuffer = mediaSource.addSourceBuffer(type);
     // 'sequence' mode makes each appended fragment play back-to-back regardless
@@ -46,6 +49,16 @@ function setupMediaSource(codecString) {
     log('MediaSource ready:', type);
     pump();
   });
+}
+
+// Blank the screen and drop the current MediaSource — used when the sender
+// stops mirroring (but stays connected).
+function teardownPlayback() {
+  queue = [];
+  sourceBuffer = null;
+  mediaSource = null;
+  try { video.removeAttribute('src'); video.load(); } catch (e) {}
+  video.style.visibility = 'hidden';
 }
 
 // Append the next queued fragment when the SourceBuffer is idle.
@@ -82,9 +95,17 @@ function connect() {
   ws.onclose = function () { log('WebSocket closed — reconnecting'); setTimeout(connect, 1000); };
   ws.onmessage = function (e) {
     if (typeof e.data === 'string') {
-      // First message is the codec string.
-      log('codec:', e.data);
-      if (!mediaSource) setupMediaSource(e.data);
+      // Control messages are JSON: {"t":"init","codec":"..."} starts a stream,
+      // {"t":"stop"} blanks the screen when the sender stops mirroring.
+      var msg;
+      try { msg = JSON.parse(e.data); } catch (err) { log('bad control msg', e.data); return; }
+      if (msg.t === 'init') {
+        log('init, codec:', msg.codec);
+        setupMediaSource(msg.codec);
+      } else if (msg.t === 'stop') {
+        log('stop — blanking');
+        teardownPlayback();
+      }
       return;
     }
     queue.push(new Uint8Array(e.data));
