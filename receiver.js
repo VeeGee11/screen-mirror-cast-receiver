@@ -19,6 +19,7 @@ options.maxInactivity = 3600; // don't idle-close while mirroring
 context.start(options);
 
 const video = document.getElementById('video');
+const loading = document.getElementById('loading');
 let mediaSource = null;
 let sourceBuffer = null;
 let queue = [];
@@ -27,6 +28,15 @@ let ws = null;
 function log() {
   console.log.apply(console, ['[Receiver]'].concat([].slice.call(arguments)));
 }
+
+// The #loading spinner is visible by default in the HTML (covers the ~5-8s
+// between the Cast session launching and the first real frame decoding), and
+// re-shown on stop/disconnect. Only 'playing' hides it — not 'waiting', so a
+// brief mid-stream stall/live-edge correction doesn't flicker the overlay in
+// and out; this is deliberately scoped to the connect/reconnect black screen.
+function showLoading() { if (loading) loading.style.display = 'flex'; }
+function hideLoading() { if (loading) loading.style.display = 'none'; }
+video.addEventListener('playing', hideLoading);
 
 function setupMediaSource(codecString) {
   const type = 'video/mp4; codecs="' + codecString + '"';
@@ -59,6 +69,7 @@ function teardownPlayback() {
   mediaSource = null;
   try { video.removeAttribute('src'); video.load(); } catch (e) {}
   video.style.visibility = 'hidden';
+  showLoading();
 }
 
 // Append the next queued fragment when the SourceBuffer is idle.
@@ -92,7 +103,7 @@ function connect() {
   ws.binaryType = 'arraybuffer';
   ws.onopen = function () { log('WebSocket open'); };
   ws.onerror = function () { log('WebSocket error'); };
-  ws.onclose = function () { log('WebSocket closed — reconnecting'); setTimeout(connect, 1000); };
+  ws.onclose = function () { log('WebSocket closed — reconnecting'); showLoading(); setTimeout(connect, 1000); };
   ws.onmessage = function (e) {
     if (typeof e.data === 'string') {
       // Control messages are JSON: {"t":"init","codec":"..."} starts a stream,
