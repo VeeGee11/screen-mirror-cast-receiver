@@ -8,7 +8,14 @@
 // and stays alive (heartbeats), but we do playback ourselves rather than
 // through CAF's HLS/DASH player.
 
-const WS_URL = 'wss://cast.badbackpackers.com:8080';
+// The sender tells us which host to open the WebSocket to — its own per-device
+// hostname (<slug>.cast.badbackpackers.com) — via a custom Cast message sent
+// right after launch (see HOST_NAMESPACE). Each phone thus points us back at
+// itself specifically, so two phones never fight over one shared DNS record.
+// Older senders don't send it, so we fall back to the shared legacy host.
+const LEGACY_HOST = 'cast.badbackpackers.com';
+const HOST_NAMESPACE = 'urn:x-cast:com.dnovakoff.screenmirror';
+let wsHost = null; // resolved from the launch message (or the fallback below)
 
 // Start CAF so the platform reports the app running to the sender (the sender's
 // LAUNCH waits for that) and the session stays alive. We don't use its
@@ -16,6 +23,18 @@ const WS_URL = 'wss://cast.badbackpackers.com:8080';
 const context = cast.framework.CastReceiverContext.getInstance();
 const options = new cast.framework.CastReceiverOptions();
 options.maxInactivity = 3600; // don't idle-close while mirroring
+// Declare + listen on the custom namespace BEFORE start() — the host message
+// can arrive the instant the app reports running, so the listener must already
+// be in place.
+options.customNamespaces = Object.assign({}, options.customNamespaces);
+options.customNamespaces[HOST_NAMESPACE] = cast.framework.system.MessageType.JSON;
+context.addCustomMessageListener(HOST_NAMESPACE, function (event) {
+  const host = event && event.data && event.data.host;
+  if (typeof host === 'string' && host) {
+    log('host from sender:', host);
+    startConnection(host);
+  }
+});
 context.start(options);
 
 const video = document.getElementById('video');
@@ -98,8 +117,22 @@ function trimBuffer(force) {
   }
 }
 
+// (Re)open the WebSocket to `host`. Safe to call again if the sender's real
+// host arrives after we'd already fallen back to the legacy one — it tears the
+// old socket down and reconnects to the right place.
+function startConnection(host) {
+  if (host === wsHost && ws) return; // already pointed there
+  wsHost = host;
+  if (ws) {
+    try { ws.onclose = null; ws.close(); } catch (e) {}
+    ws = null;
+  }
+  connect();
+}
+
 function connect() {
-  ws = new WebSocket(WS_URL);
+  if (!wsHost) return; // nothing to connect to yet
+  ws = new WebSocket('wss://' + wsHost + ':8080');
   ws.binaryType = 'arraybuffer';
   ws.onopen = function () { log('WebSocket open'); };
   ws.onerror = function () { log('WebSocket error'); };
@@ -125,7 +158,16 @@ function connect() {
     pump();
   };
 }
-connect();
+
+// If the sender never identifies its host (older app build that predates the
+// per-device hostname handoff), fall back to the shared legacy record so those
+// installs keep working through the rollout.
+setTimeout(function () {
+  if (!wsHost) {
+    log('no host message — falling back to', LEGACY_HOST);
+    startConnection(LEGACY_HOST);
+  }
+}, 3000);
 
 // Stay near the live edge and keep playing. Because fragments arrive
 // continuously in real time, a small buffer is stable (unlike HLS, seeking to
@@ -145,4 +187,4 @@ setInterval(function () {
   }
 }, 500);
 
-log('Started, connecting to', WS_URL);
+log('Started; awaiting host from sender (fallback:', LEGACY_HOST + ')');
