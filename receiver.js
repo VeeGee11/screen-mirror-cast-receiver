@@ -210,8 +210,12 @@ setInterval(function () {
     if (drift > 4) {
       video.currentTime = end - 1.5;
       video.playbackRate = 1.0;
-    } else if (drift > 1.4) {
-      video.playbackRate = 1.15; // catch up gradually, imperceptibly
+    } else if (drift > 0.8) {
+      // Lower trigger (was 1.4) + faster catch-up rate (was 1.15) tighten the
+      // steady-state gap the oscillation used to settle around — still well
+      // within the range players like YouTube/Twitch use for live catch-up
+      // without being noticeable.
+      video.playbackRate = 1.25;
     } else {
       video.playbackRate = 1.0;
     }
