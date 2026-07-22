@@ -189,16 +189,31 @@ setTimeout(function () {
   }
 }, 3000);
 
-// Stay near the live edge and keep playing. Because fragments arrive
-// continuously in real time, a small buffer is stable (unlike HLS, seeking to
-// near-live here doesn't starve the player — new data is always incoming).
+// Stay near the live edge without visible jumps. The previous approach did a
+// hard seek to end-0.4s whenever drift exceeded 1.4s — but this pipeline's
+// real end-to-end latency (capture/encode/network) is consistently more than
+// that, so right after the seek there was almost no buffer ahead of the
+// playhead. Playback immediately caught up to the buffered edge and stalled
+// waiting for the next fragment (~2s), and during that stall the backlog
+// grew again, drift exceeded 1.4s again, and it seeked again — a
+// self-sustaining play/stall oscillation, seen as a repeating "jump 2s, pause
+// 2s" pattern. Nudging playbackRate instead closes the gap gradually with no
+// visible jump or stall — the standard technique for low-latency live
+// players. A hard seek is kept only as a one-time recovery for drift large
+// enough that playbackRate alone would take too long to close (e.g. right
+// after a stall or reconnect), and lands with real cushion instead of
+// end-0.4 so it doesn't immediately re-trigger the same stall.
 setInterval(function () {
   if (sourceBuffer && !sourceBuffer.updating && sourceBuffer.buffered.length) {
     const end = sourceBuffer.buffered.end(sourceBuffer.buffered.length - 1);
-    if (end - video.currentTime > 1.4) {
-      // Drifted behind — jump forward to ~0.4s behind live. Fragments arrive
-      // continuously, so a small cushion stays stable while keeping latency low.
-      video.currentTime = end - 0.4;
+    const drift = end - video.currentTime;
+    if (drift > 4) {
+      video.currentTime = end - 1.5;
+      video.playbackRate = 1.0;
+    } else if (drift > 1.4) {
+      video.playbackRate = 1.15; // catch up gradually, imperceptibly
+    } else {
+      video.playbackRate = 1.0;
     }
     trimBuffer(false);
   }
