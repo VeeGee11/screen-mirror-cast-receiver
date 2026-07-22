@@ -23,6 +23,17 @@ let wsHost = null; // resolved from the launch message (or the fallback below)
 const context = cast.framework.CastReceiverContext.getInstance();
 const options = new cast.framework.CastReceiverOptions();
 options.maxInactivity = 3600; // don't idle-close while mirroring
+// maxInactivity only covers "no sender connected." CAF has a *separate*
+// IdleTimeoutManager that watches for actual PlayerManager/media-session
+// activity and kills the whole app ~5 minutes in if it sees none — which is
+// always, here, since we deliberately bypass PlayerManager and drive
+// MediaSource ourselves for latency. Confirmed via CDP: receiver console
+// logged "[IdleTimeoutManager] timer expired" at ~300s, at the same moment
+// the sender's media socket got dropped/reset — this is what's been causing
+// the ~5-minute mirroring drop, not a network or backpressure issue. Per
+// Google's own docs, this flag is for exactly this case: a custom player
+// that doesn't feed PlayerManager.
+options.disableIdleTimeout = true;
 // Declare + listen on the custom namespace BEFORE start() — the host message
 // can arrive the instant the app reports running, so the listener must already
 // be in place.
@@ -132,11 +143,20 @@ function startConnection(host) {
 
 function connect() {
   if (!wsHost) return; // nothing to connect to yet
+  const openedAt = Date.now();
   ws = new WebSocket('wss://' + wsHost + ':8080');
   ws.binaryType = 'arraybuffer';
   ws.onopen = function () { log('WebSocket open'); };
   ws.onerror = function () { log('WebSocket error'); };
-  ws.onclose = function () { log('WebSocket closed — reconnecting'); showLoading(); setTimeout(connect, 1000); };
+  // code/reason distinguish a graceful sender-side close (1000/1001 with our
+  // own reason string) from the platform/browser tearing the socket down on
+  // us (1006 abnormal closure, no reason) — logged with uptime so repeated
+  // fixed-duration drops show up as a pattern instead of a mystery.
+  ws.onclose = function (event) {
+    log('WebSocket closed — reconnecting', 'code:', event.code, 'reason:', event.reason || '(none)', 'uptimeMs:', Date.now() - openedAt);
+    showLoading();
+    setTimeout(connect, 1000);
+  };
   ws.onmessage = function (e) {
     if (typeof e.data === 'string') {
       // Control messages are JSON: {"t":"init","codec":"..."} starts a stream,
