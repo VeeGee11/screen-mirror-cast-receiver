@@ -141,12 +141,66 @@ function startConnection(host) {
   connect();
 }
 
+// --- Connection-failure diagnosis -------------------------------------------
+// The TV resolves our hostname through its router, and many routers have
+// "DNS rebind protection": they drop any public DNS answer that points at a
+// private (LAN) address, which is exactly what our per-device hostname is.
+// The browser only reports a generic WebSocket failure, so after a few
+// consecutive failed attempts we ask Cloudflare's DNS-over-HTTPS (which
+// bypasses the router) what the hostname really resolves to. If it resolves
+// to a private address but we still can't connect, tell the user what to do
+// right on the TV instead of leaving a silent spinner.
+const FAILS_BEFORE_DIAGNOSIS = 3;
+let failedAttempts = 0;
+let diagnosing = false;
+
+function isPrivateIPv4(ip) {
+  const p = ip.split('.').map(Number);
+  return p[0] === 10 || (p[0] === 172 && p[1] >= 16 && p[1] <= 31) ||
+    (p[0] === 192 && p[1] === 168) || (p[0] === 169 && p[1] === 254);
+}
+
+function showHint(text) {
+  const el = document.getElementById('loading-hint');
+  if (el) el.textContent = text || '';
+}
+
+function diagnoseConnectionFailure(host) {
+  if (diagnosing) return;
+  diagnosing = true;
+  const url = 'https://cloudflare-dns.com/dns-query?type=A&name=' + encodeURIComponent(host);
+  fetch(url, { headers: { accept: 'application/dns-json' } })
+    .then(function (r) { return r.json(); })
+    .then(function (json) {
+      const answers = (json.Answer || []).filter(function (a) { return a.type === 1; });
+      if (answers.length === 0) {
+        log('diagnosis: public DNS has no record for', host);
+        showHint('Can\u2019t find your phone yet. Stop and start mirroring again.');
+      } else if (isPrivateIPv4(answers[0].data)) {
+        log('diagnosis: public DNS resolves', host, 'to', answers[0].data, '\u2014 router may be blocking it');
+        showHint('Can\u2019t reach your phone. Your Wi-Fi router may be blocking local addresses in DNS. ' +
+          'On this Chromecast: Settings \u2192 Network & Internet \u2192 Advanced \u2192 Private DNS \u2192 ' +
+          'enter one.one.one.one, then start mirroring again.');
+      } else {
+        showHint('Can\u2019t reach your phone. Make sure it is on the same Wi-Fi as this Chromecast.');
+      }
+    })
+    .catch(function (e) { log('diagnosis failed', e && e.message); })
+    .then(function () { diagnosing = false; });
+}
+
 function connect() {
   if (!wsHost) return; // nothing to connect to yet
   const openedAt = Date.now();
+  let didOpen = false;
   ws = new WebSocket('wss://' + wsHost + ':8080');
   ws.binaryType = 'arraybuffer';
-  ws.onopen = function () { log('WebSocket open'); };
+  ws.onopen = function () {
+    log('WebSocket open');
+    didOpen = true;
+    failedAttempts = 0;
+    showHint('');
+  };
   ws.onerror = function () { log('WebSocket error'); };
   // code/reason distinguish a graceful sender-side close (1000/1001 with our
   // own reason string) from the platform/browser tearing the socket down on
@@ -155,6 +209,7 @@ function connect() {
   ws.onclose = function (event) {
     log('WebSocket closed — reconnecting', 'code:', event.code, 'reason:', event.reason || '(none)', 'uptimeMs:', Date.now() - openedAt);
     showLoading();
+    if (!didOpen && ++failedAttempts >= FAILS_BEFORE_DIAGNOSIS) diagnoseConnectionFailure(wsHost);
     setTimeout(connect, 1000);
   };
   ws.onmessage = function (e) {
